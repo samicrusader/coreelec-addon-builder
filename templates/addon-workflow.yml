@@ -1,0 +1,25 @@
+# Copy to <addon repo>/.github/workflows/coreelec.yml
+name: Build CoreELEC addon
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "coreelec/**"
+      - "src/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/coreelec.yml"
+  pull_request:
+  release:
+    types: [published]
+
+jobs:
+  coreelec:
+    uses: samicrusader/coreelec-addon-builder/.github/workflows/build-addon.yml@master
+    permissions:
+      contents: read
+      packages: read
+    with:
+      package-dir: coreelec
+      sdk-tag: 21-amlogic-ng-arm
+      # artifact-name: my.addon-coreelec-amlogic-ng-arm

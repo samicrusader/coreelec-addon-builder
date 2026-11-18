@@ -1,0 +1,83 @@
+name: Build CoreELEC addon
+
+# Reusable workflow: call it from an addon repository (see
+# templates/addon-workflow.yml). It checks out the calling repository, builds
+# its package.mk inside the SDK image and uploads the installable ZIP.
+
+on:
+  workflow_call:
+    inputs:
+      package-dir:
+        description: "Directory with package.mk, relative to the repo root"
+        type: string
+        default: coreelec
+      sdk-tag:
+        description: "SDK image tag (SDK_TAG from sdk/<name>/config.env)"
+        type: string
+        default: 21-amlogic-ng-arm
+      image:
+        description: "SDK image repository"
+        type: string
+        default: ghcr.io/samicrusader/coreelec-addon-builder
+      artifact-name:
+        description: "Name of the uploaded artifact (default: <repo>-<sdk-tag>)"
+        type: string
+        default: ""
+      retention-days:
+        type: number
+        default: 14
+    outputs:
+      artifact-name:
+        description: "Name of the uploaded artifact"
+        value: ${{ jobs.build.outputs.artifact-name }}
+
+jobs:
+  build:
+    name: ${{ inputs.sdk-tag }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      artifact-name: ${{ steps.name.outputs.name }}
+    steps:
+      - name: Check out addon
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull SDK image
+        run: docker pull "${{ inputs.image }}:${{ inputs.sdk-tag }}"
+
+      - name: Build addon
+        run: |
+          # The image runs as uid 1000; let it write the output directory.
+          mkdir -p dist
+          chmod 0777 dist
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/addon:ro" \
+            -v "${GITHUB_WORKSPACE}/dist:/out" \
+            "${{ inputs.image }}:${{ inputs.sdk-tag }}" \
+            /addon "${{ inputs.package-dir }}"
+          ls -l dist
+
+      - name: Artifact name
+        id: name
+        env:
+          NAME: ${{ inputs.artifact-name }}
+          SDK_TAG: ${{ inputs.sdk-tag }}
+        run: echo "name=${NAME:-${GITHUB_REPOSITORY#*/}-${SDK_TAG}}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload addon
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.name }}
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}

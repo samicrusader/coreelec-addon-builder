@@ -1,0 +1,10 @@
+# Everything here runs on Linux; keep LF even on a Windows checkout.
+* text=auto eol=lf
+*.sh text eol=lf
+*.mk text eol=lf
+*.env text eol=lf
+Dockerfile text eol=lf
+
+# Patches must stay byte-exact: context lines for blank lines are a single
+# space, which whitespace checks/"fixes" would otherwise strip.
+*.patch -text -whitespace

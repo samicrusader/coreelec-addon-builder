@@ -1,0 +1,105 @@
+name: Build SDK images
+
+# Builds one image per directory under sdk/ and pushes it to
+# ghcr.io/<owner>/coreelec-addon-builder:<SDK_TAG> (plus a tag pinned to the
+# CoreELEC commit). A cold build takes roughly 45-60 minutes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdk:
+        description: "SDK directory under sdk/ to build (blank = all)"
+        required: false
+        default: ""
+  push:
+    branches: [master]
+    paths:
+      - "docker/**"
+      - "scripts/**"
+      - "sdk/**"
+      - ".github/workflows/sdk.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: sdk-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  list:
+    runs-on: ubuntu-24.04
+    outputs:
+      sdks: ${{ steps.list.outputs.sdks }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        env:
+          ONLY: ${{ inputs.sdk }}
+        run: |
+          if [ -n "${ONLY}" ]; then
+            [ -f "sdk/${ONLY}/config.env" ] || { echo "::error::sdk/${ONLY}/config.env not found"; exit 1; }
+            sdks="[\"${ONLY}\"]"
+          else
+            sdks="$(find sdk -mindepth 2 -maxdepth 2 -name config.env -printf '%h\n' \
+                    | xargs -n1 basename | sort | jq -R . | jq -sc .)"
+          fi
+          echo "sdks=${sdks}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: list
+    name: ${{ matrix.sdk }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: ${{ fromJSON(needs.list.outputs.sdks) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h /
+
+      - name: Read SDK config
+        id: cfg
+        run: |
+          set -a; . "sdk/${{ matrix.sdk }}/config.env"; set +a
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/coreelec-addon-builder"
+          {
+            echo "image=${image}"
+            echo "tags=${image}:${SDK_TAG},${image}:${SDK_TAG}-${COREELEC_REF:0:12}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+        with:
+          # Don't clip the (very long) CoreELEC build log on failure.
+          driver-opts: |
+            env.BUILDKIT_STEP_LOG_MAX_SIZE=-1
+            env.BUILDKIT_STEP_LOG_MAX_SPEED=-1
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          build-args: SDK=${{ matrix.sdk }}
+          tags: ${{ steps.cfg.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.description=CoreELEC addon SDK (${{ matrix.sdk }})
+          push: true
+          provenance: false
+
+      - name: Disk usage
+        if: always()
+        run: df -h /
